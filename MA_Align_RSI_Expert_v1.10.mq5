@@ -1,5 +1,5 @@
 ﻿//+------------------------------------------------------------------+
-//|                                  MA_Align_RSI_Expert_v1.00.mq5    |
+//|                                  MA_Align_RSI_Expert_v1.10.mq5    |
 //|                                                                  |
 //| XAUUSD M1 정배열 매수 + RSI 매도 물타기 EA                         |
 //| [매수]                                                            |
@@ -15,10 +15,13 @@
 //|  - 기준랏 비례: 사다리 랏·매수 랏·익절 목표가 기준랏/0.01 배       |
 //|  - EA 포지션 합계 손실 -$2,000(고정) 이면 전체 청산 후 EA 정지     |
 //|  - 매수·매도 동시 보유 → 헤지 계좌 전용                           |
+//| [표시] v1.10                                                      |
+//|  - 차트 우상단 자동매매 표시 아래: 현재 손익(초록) / 오늘 익절(노랑)|
+//|  - 수동 청산한 EA 포지션, 수동(폰 포함) 매매도 함께 집계            |
 //+------------------------------------------------------------------+
 #property copyright "Code Expert"
 #property link      "https://mql5.com"
-#property version   "1.00"
+#property version   "1.10"
 
 #include <Trade\Trade.mqh>
 CTrade trade;
@@ -52,7 +55,19 @@ input double InpMaxLoss  = 2000.0;        // EA 포지션 합계 손실 한도 (
 input int    InpSlippage = 30;            // 허용 슬리피지 (POINTS)
 input ulong  MagicNumber = 20261011;      // 매직넘버
 
+input group "--- 7. 차트 표시 (우상단) ---"
+input bool   InpIncludeManual = true;     // 현재 손익·오늘 익절에 수동 매매(매직 0)도 포함
+input int    InpLabelX        = 10;       // 오른쪽 끝에서 거리 (px)
+input int    InpLabelY        = 25;       // 위쪽 끝에서 거리 (px) - 자동매매 표시 바로 아래
+input int    InpLabelGap      = 32;       // 두 줄 사이 간격 (px)
+input int    InpLabelSize     = 16;       // 글자 크기
+input string InpLabelFont     = "맑은 고딕"; // 글꼴
+
 //+------------------------------------------------------------------+
+string LABEL_CURRENT_PNL  = "MAR_Label_CurrentPnL";
+string LABEL_TODAY_PROFIT = "MAR_Label_TodayProfit";
+bool   g_forceHistory     = false;        // 오늘 익절 즉시 재계산 요청
+
 int      g_maHandle[5];
 int      g_rsiHandle   = INVALID_HANDLE;
 double   g_ladder[];                      // 기준랏 비례 적용 전 사다리
@@ -117,7 +132,23 @@ void OnDeinit(const int reason)
    for(int i = 0; i < 5; i++)
       if(g_maHandle[i] != INVALID_HANDLE) IndicatorRelease(g_maHandle[i]);
    if(g_rsiHandle != INVALID_HANDLE) IndicatorRelease(g_rsiHandle);
+   ObjectDelete(0, LABEL_CURRENT_PNL);
+   ObjectDelete(0, LABEL_TODAY_PROFIT);
    Comment("");
+}
+
+//+------------------------------------------------------------------+
+//| 청산(수동 포함)이 일어나면 오늘 익절 즉시 갱신                     |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   {
+      g_forceHistory = true;
+      UpdateProfitDisplay();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -157,6 +188,7 @@ void OnTick()
    }
 
    UpdateComment();
+   UpdateProfitDisplay();
 }
 
 //+------------------------------------------------------------------+
@@ -394,7 +426,7 @@ void UpdateComment()
    int buys  = CountPositions(POSITION_TYPE_BUY);
    int sells = CountPositions(POSITION_TYPE_SELL);
    Comment(StringFormat(
-      "MA_Align_RSI v1.00\n"
+      "MA_Align_RSI v1.10\n"
       "매수: %d / %d   손익 %.2f$\n"
       "매도: %d / %d   손익 %.2f$  (익절 목표 %.2f$)\n"
       "합계 손익: %.2f$  (손실 한도 -%.0f$)\n"
@@ -403,5 +435,153 @@ void UpdateComment()
       sells, ArraySize(g_ladder), TotalProfit(POSITION_TYPE_SELL), SellTarget(),
       TotalProfit(-1), InpMaxLoss,
       g_buyArmed ? "예" : "아니오 (120<240 대기)"));
+}
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| 차트 우상단 표시 (자동매매 표시 아래)                             |
+//|   현재 손익 (초록) / 오늘 익절 (노랑)                             |
+//+------------------------------------------------------------------+
+void UpdateProfitDisplay()
+{
+   SetChartLabel(LABEL_CURRENT_PNL,  "현재 손익: " + FormatUSD(CurrentDisplayPnL()),
+                 InpLabelY,               clrLime);
+   SetChartLabel(LABEL_TODAY_PROFIT, "오늘 익절: " + FormatUSD(GetTodayClosedProfit()),
+                 InpLabelY + InpLabelGap, clrYellow);
+   ChartRedraw(0);
+}
+
+string FormatUSD(double value)
+{
+   string s = "$" + DoubleToString(MathAbs(value), 2);
+   return (value < -0.005) ? "-" + s : s;
+}
+
+void SetChartLabel(string name, string text, int y, color textColor)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, InpLabelX);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, InpLabelSize);
+   ObjectSetString(0, name, OBJPROP_FONT, InpLabelFont);
+}
+
+//+------------------------------------------------------------------+
+//| 집계 대상 매직: EA 매직, (옵션) 수동 매매 매직 0                   |
+//+------------------------------------------------------------------+
+bool IsCountedMagic(long magic)
+{
+   if(magic == (long)MagicNumber) return true;
+   return (InpIncludeManual && magic == 0);
+}
+
+//+------------------------------------------------------------------+
+//| 현재 열린 포지션 손익 (EA + 수동)                                 |
+//+------------------------------------------------------------------+
+double CurrentDisplayPnL()
+{
+   double sum = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(PositionGetTicket(i) == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(!IsCountedMagic(PositionGetInteger(POSITION_MAGIC))) continue;
+      sum += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return sum;
+}
+
+//+------------------------------------------------------------------+
+//| 오늘(서버시간 00:00 이후) 청산된 확정 손익                        |
+//| - EA가 청산한 딜                                                  |
+//| - 수동으로 청산한 EA 포지션 (청산 딜 magic=0 → 진입 딜 magic 확인) |
+//| - (옵션) 수동·폰으로 진입/청산한 포지션                           |
+//+------------------------------------------------------------------+
+double GetTodayClosedProfit()
+{
+   static double   cached   = 0.0;
+   static datetime lastCalc = 0;
+
+   // 1초 이내 재호출은 캐시 사용 (청산 직후엔 강제 갱신)
+   datetime nowLocal = TimeLocal();
+   if(!g_forceHistory && lastCalc != 0 && nowLocal - lastCalc < 1)
+      return cached;
+   lastCalc       = nowLocal;
+   g_forceHistory = false;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime todayStart = StructToTime(dt);
+
+   if(!HistorySelect(todayStart, TimeCurrent() + 60))
+      return cached;
+
+   double sum = 0.0;
+
+   // 1차: 청산 딜 수집 (EA magic이면 바로 합산, 아니면 진입 딜 확인 대기열)
+   ulong  pendPos[];
+   double pendProfit[];
+   int    pendCount = 0;
+
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      if(HistoryDealGetString(deal, DEAL_SYMBOL) != _Symbol) continue;
+
+      long entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT && entry != DEAL_ENTRY_OUT_BY)
+         continue;
+
+      double pnl = HistoryDealGetDouble(deal, DEAL_PROFIT)
+                 + HistoryDealGetDouble(deal, DEAL_SWAP)
+                 + HistoryDealGetDouble(deal, DEAL_COMMISSION);
+
+      if(HistoryDealGetInteger(deal, DEAL_MAGIC) == (long)MagicNumber)
+      {
+         sum += pnl;
+      }
+      else
+      {
+         ArrayResize(pendPos, pendCount + 1);
+         ArrayResize(pendProfit, pendCount + 1);
+         pendPos[pendCount]    = (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+         pendProfit[pendCount] = pnl;
+         pendCount++;
+      }
+   }
+
+   // 2차: 진입 딜의 magic으로 EA 포지션인지 / 수동 포지션인지 판별
+   for(int k = 0; k < pendCount; k++)
+   {
+      if(pendPos[k] == 0) continue;
+      if(!HistorySelectByPosition(pendPos[k])) continue;
+
+      int n = HistoryDealsTotal();
+      for(int j = 0; j < n; j++)
+      {
+         ulong t = HistoryDealGetTicket(j);
+         if(t == 0) continue;
+         if(HistoryDealGetInteger(t, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+         if(HistoryDealGetString(t, DEAL_SYMBOL) == _Symbol &&
+            IsCountedMagic(HistoryDealGetInteger(t, DEAL_MAGIC)))
+            sum += pendProfit[k];
+         break;
+      }
+   }
+
+   cached = sum;
+   return cached;
 }
 //+------------------------------------------------------------------+

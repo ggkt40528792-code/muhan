@@ -3,6 +3,8 @@
 //|                                           www.t.me/invest_sniper |
 //|                                                                  |
 //| IS Best Gold EA.mq4 (MT4) → MT5 변환판                            |
+//| - 차트 우상단 표시: 현재손익(초록) / 오늘익절(노랑)                 |
+//| - 차트 왼쪽 아래 전체 청산 버튼                                    |
 //| - 주문(Order) 기반 → 포지션(Position) / 거래내역(Deal) 기반으로 변경 |
 //| - 매매 로직·파라미터·정보 패널은 원본과 동일하게 유지              |
 //| - 그리드(추가 진입) 구조상 헤징(Hedging) 계좌 전용                 |
@@ -37,6 +39,7 @@ input color     TextColor        =clrWhite;   // 패널 글자색
 input color     InfoDataColor    =clrDodgerBlue; // 패널 데이터 글자색
 input color     FonColor         =clrBlack;   // 패널 배경색
 input int       FontSizeInfo     =7;          // 패널 글자 크기
+input bool      ConfirmClose     =false;      // 청산 버튼 클릭 시 확인창 표시 (true = 한 번 더 확인)
 //+------------------------------------------------------------------+
 //|======================= 추가 변수 ================================|
 //+------------------------------------------------------------------+
@@ -52,6 +55,10 @@ double           Lot              =0;
 int              DTime            =0;
 double           DPrice           =0;
 double           GapBar;
+string           LABEL_CURRENT_PNL  ="EA_Label_CurrentPnL";
+string           LABEL_TODAY_PROFIT ="EA_Label_TodayProfit";
+string           BTN_CLOSE_ALL      ="EA_Btn_CloseAll";
+bool             forceHistoryRefresh=false;   // 오늘익절 즉시 재계산 요청
 //+------------------------------------------------------------------+
 //|======================= 라이선스 변수 ============================|
 //+------------------------------------------------------------------+
@@ -73,6 +80,9 @@ trade.SetExpertMagicNumber(Magic);
 trade.SetTypeFillingBySymbol(_Symbol);
 if(AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
 {Print("경고: 헤징 계좌가 아닙니다. 그리드 추가 진입이 하나의 포지션으로 합쳐져 원본과 다르게 동작합니다.");}
+ObjectDelete(0,LABEL_CURRENT_PNL);
+ObjectDelete(0,LABEL_TODAY_PROFIT);
+CreateCloseButton();
 return(INIT_SUCCEEDED);
 }
 //+------------------------------------------------------------------+
@@ -216,6 +226,8 @@ if(Info)
    PutButtonBS("TRADEs_B",220,245,"BUY           " + DoubleToString(Lot,2),100,22,FonButtonBuy,TextButtonBS);
    PutButtonBS("TRADEs_S",118,245,"SELL           " + DoubleToString(Lot,2),100,22,FonButtonSell,TextButtonBS);
 }
+//======= 현재손익 / 오늘익절 표시
+UpdateProfitDisplay(ProfitAll(-1),GetTodayClosedProfit());
 //======= 종료
 }
 }
@@ -224,6 +236,23 @@ if(Info)
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
+//+------------------------------------------------------------------+
+//   전체 청산 버튼
+//+------------------------------------------------------------------+
+if(id==CHARTEVENT_OBJECT_CLICK && sparam==BTN_CLOSE_ALL)
+{
+ //--- 버튼 눌림 상태 원복
+ ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_STATE,false);
+ ChartRedraw(0);
+ if(ConfirmClose)
+ {if(MessageBox("이 EA의 모든 포지션을 청산할까요?","전체 청산",MB_YESNO|MB_ICONQUESTION)!=IDYES)
+   return;}
+ Print("[수동 청산 버튼] 전체 포지션 시장가 청산");
+ ClosePos();
+ //--- 오늘익절 즉시 갱신
+ forceHistoryRefresh=true;
+ return;
+}
 //+------------------------------------------------------------------+
 //   클릭 시 버튼 색 변경
 //+------------------------------------------------------------------+
@@ -258,6 +287,129 @@ ChartRedraw();
 //+------------------------------------------------------------------+
 //|========================== 함수 ==================================|
 //+------------------------------------------------------------------+
+//--- 전체 청산 버튼 생성 (차트 왼쪽 아래)
+void CreateCloseButton()
+{
+   ObjectDelete(0,BTN_CLOSE_ALL);
+   ObjectCreate(0,BTN_CLOSE_ALL,OBJ_BUTTON,0,0,0);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_CORNER,CORNER_LEFT_LOWER);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_ANCHOR,ANCHOR_LEFT_LOWER);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_XDISTANCE,15);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_YDISTANCE,60);   // 차트 하단에서 위로 띄우는 거리 (px) - 더 올리려면 값을 키우세요
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_XSIZE,130);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_YSIZE,34);
+   ObjectSetString(0,BTN_CLOSE_ALL,OBJPROP_TEXT,"전체 청산");
+   ObjectSetString(0,BTN_CLOSE_ALL,OBJPROP_FONT,"맑은 고딕");
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_FONTSIZE,11);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_COLOR,clrWhite);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_BGCOLOR,clrCrimson);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_BORDER_COLOR,clrWhite);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_HIDDEN,true);
+   ObjectSetInteger(0,BTN_CLOSE_ALL,OBJPROP_ZORDER,10);
+   ChartRedraw(0);
+}
+//--- 현재손익(초록) / 오늘익절(노랑) 표시 (우상단, 정보 패널이 켜져 있으면 패널 아래)
+void UpdateProfitDisplay(double currentPnL,double todayProfit)
+{
+   int y=(Info ? 280 : 30);
+   SetChartLabel(LABEL_CURRENT_PNL, "현재손익: "+DoubleToString(currentPnL,2)+" USD", 15,y,   clrLime,  11,"맑은 고딕");
+   SetChartLabel(LABEL_TODAY_PROFIT,"오늘익절: "+DoubleToString(todayProfit,2)+" USD",15,y+25,clrYellow,11,"맑은 고딕");
+   ChartRedraw(0);
+}
+void SetChartLabel(string name,string text,int x,int y,color textColor,int fontSize,string font)
+{
+   if(ObjectFind(0,name)<0)
+   {
+      ObjectCreate(0,name,OBJ_LABEL,0,0,0);
+      ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+      ObjectSetInteger(0,name,OBJPROP_ANCHOR,ANCHOR_RIGHT_UPPER);
+      ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+      ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   }
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetString(0,name,OBJPROP_TEXT,text);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,textColor);
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,fontSize);
+   ObjectSetString(0,name,OBJPROP_FONT,font);
+}
+//--- 오늘(서버시간 00:00 이후) 청산된 확정 손익 (현재 심볼)
+//   EA가 청산한 딜 + 터미널에서 수동으로 청산한 EA 포지션 모두 포함
+//   (수동 청산 딜은 magic=0 이라서, 해당 포지션의 진입 딜 magic으로 판별)
+double GetTodayClosedProfit()
+{
+   static double   cached=0.0;
+   static datetime lastCalc=0;
+
+   //--- 1초 이내 재호출은 캐시 사용 (버튼 청산 직후엔 강제 갱신)
+   datetime nowLocal=TimeLocal();
+   if(!forceHistoryRefresh && lastCalc!=0 && nowLocal-lastCalc<1)
+      return(cached);
+   lastCalc=nowLocal;
+   forceHistoryRefresh=false;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(),dt);
+   dt.hour=0; dt.min=0; dt.sec=0;
+   datetime todayStart=StructToTime(dt);
+
+   if(!HistorySelect(todayStart,TimeCurrent()+60))
+      return(cached);
+
+   double sum=0.0;
+   //--- 1차: 청산 딜 수집 (EA magic이면 바로 합산, 아니면 포지션 확인 대기열)
+   ulong  pendPos[];
+   double pendProfit[];
+   int    pendCount=0;
+
+   int total=HistoryDealsTotal();
+   for(int i=0;i<total;i++)
+   {
+      ulong dealTicket=HistoryDealGetTicket(i);
+      if(dealTicket==0) continue;
+      if(HistoryDealGetString(dealTicket,DEAL_SYMBOL)!=_Symbol) continue;
+
+      long entry=HistoryDealGetInteger(dealTicket,DEAL_ENTRY);
+      if(entry!=DEAL_ENTRY_OUT && entry!=DEAL_ENTRY_INOUT && entry!=DEAL_ENTRY_OUT_BY)
+         continue;
+
+      double dealPnL=HistoryDealGetDouble(dealTicket,DEAL_PROFIT)
+                    +HistoryDealGetDouble(dealTicket,DEAL_SWAP)
+                    +HistoryDealGetDouble(dealTicket,DEAL_COMMISSION);
+
+      if(HistoryDealGetInteger(dealTicket,DEAL_MAGIC)==Magic)
+      {sum+=dealPnL;}
+      else
+      {
+         ArrayResize(pendPos,pendCount+1);
+         ArrayResize(pendProfit,pendCount+1);
+         pendPos[pendCount]   =(ulong)HistoryDealGetInteger(dealTicket,DEAL_POSITION_ID);
+         pendProfit[pendCount]=dealPnL;
+         pendCount++;
+      }
+   }
+   //--- 2차: magic이 다른(수동 청산 등) 딜은 해당 포지션의 진입 딜 magic 확인
+   for(int k=0;k<pendCount;k++)
+   {
+      if(pendPos[k]==0) continue;
+      if(!HistorySelectByPosition(pendPos[k])) continue;
+      int n=HistoryDealsTotal();
+      for(int j=0;j<n;j++)
+      {
+         ulong t=HistoryDealGetTicket(j);
+         if(t==0) continue;
+         if(HistoryDealGetInteger(t,DEAL_ENTRY)==DEAL_ENTRY_IN)
+         {
+            if(HistoryDealGetInteger(t,DEAL_MAGIC)==Magic && HistoryDealGetString(t,DEAL_SYMBOL)==_Symbol)
+               sum+=pendProfit[k];
+            break;
+         }
+      }
+   }
+   cached=sum;
+   return(cached);
+}
 //--- 랏 계산 (원본 공식 + 브로커 랏 단위 맞춤)
 double CalcLot()
 {

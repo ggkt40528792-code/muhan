@@ -23,15 +23,15 @@ CTrade trade;
 //+------------------------------------------------------------------+
 input double    LotPercent       =0.01;       // 잔고 대비 랏 비율
 input double    StopLossPercent  =0;          // 손절 (잔고 대비 %, 0 = 사용 안 함)
-input int       TakeProfit       =300;        // 그리드 익절 (1랏당 금액)
+input int       TakeProfit       =40;         // 그리드 익절 (1랏당 금액, 40 = 0.01랏당 $0.4)
 input double    TrailActivate    =1.5;        // 트레일링 시작 이익 (가격 단위, 골드 1.5 = $1.5 / 0 = 사용 안 함)
 input double    TrailLockPercent =66.7;       // 트레일링 확보 비율 (현재 이익의 %)
 input double    TrailMinStep     =0.1;        // 손절 최소 이동 단위 (가격 단위, 골드 0.1 = $0.1)
 input int       AvBarPercent     =100;        // 평균 봉 크기 대비 진입 기준 (%)
-input int       MinimumBarSize   =200;        // 최소 진입 기준 봉 크기 (포인트)
+input int       MinimumBarSize   =200;        // 최소 진입 기준 봉 크기 (포인트, 골드 2자리 200 = $2)
 input int       PeriodBar        =100;        // 평균 봉 크기 계산 기간
 input int       BarProcessing    =100;        // 고점/저점 탐색 봉 수
-input int       MaxSpread        =10;         // 최대 허용 스프레드 (포인트)
+input int       MaxSpread        =40;         // 최대 허용 스프레드 (포인트, 골드 2자리 40 = $0.4)
 input bool      UseAddOrder      =true;       // 추가 진입(그리드) 사용
 input int       MaxOrders        =100;        // 최대 포지션 수
 input int       TimeStart        =2;          // 거래 시작 시각 (서버 시간)

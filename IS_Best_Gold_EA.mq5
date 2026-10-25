@@ -5,6 +5,8 @@
 //| IS Best Gold EA.mq4 (MT4) → MT5 변환판                            |
 //| - 차트 우상단 표시: 현재손익(초록) / 오늘익절(노랑)                 |
 //| - 차트 왼쪽 아래 전체 청산 버튼                                    |
+//| - 트레일링: 이익이 TrailActivate 이상이면 현재 이익의               |
+//|   TrailLockPercent % 를 확보하도록 손절을 연속으로 올림 (1포지션만) |
 //| - 주문(Order) 기반 → 포지션(Position) / 거래내역(Deal) 기반으로 변경 |
 //| - 매매 로직·파라미터·정보 패널은 원본과 동일하게 유지              |
 //| - 그리드(추가 진입) 구조상 헤징(Hedging) 계좌 전용                 |
@@ -22,8 +24,9 @@ CTrade trade;
 input double    LotPercent       =0.01;       // 잔고 대비 랏 비율
 input double    StopLossPercent  =0;          // 손절 (잔고 대비 %, 0 = 사용 안 함)
 input int       TakeProfit       =300;        // 그리드 익절 (1랏당 금액)
-input int       Trail            =800;        // 트레일링 간격 (포인트)
-input int       TrailStart       =600;        // 트레일링 시작 / 본절 이익 (포인트)
+input double    TrailActivate    =1.5;        // 트레일링 시작 이익 (가격 단위, 골드 1.5 = $1.5 / 0 = 사용 안 함)
+input double    TrailLockPercent =66.7;       // 트레일링 확보 비율 (현재 이익의 %)
+input double    TrailMinStep     =0.1;        // 손절 최소 이동 단위 (가격 단위, 골드 0.1 = $0.1)
 input int       AvBarPercent     =100;        // 평균 봉 크기 대비 진입 기준 (%)
 input int       MinimumBarSize   =200;        // 최소 진입 기준 봉 크기 (포인트)
 input int       PeriodBar        =100;        // 평균 봉 크기 계산 기간
@@ -494,12 +497,15 @@ for(int i=PositionsTotal()-1;i>=0;i--)
   {count++;}
  }
 return(count);}
-//======= 트레일링
+//======= 트레일링 (현재 이익의 TrailLockPercent % 확보, 손절은 유리한 쪽으로만 이동)
 void Trailing()
 {ulong tic;
- double Price,Stop,TP;
+ double Price,Stop,TP,Profit,NewStop;
  double Bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
  double Ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+ double StopLevel=SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+ double LockRatio=TrailLockPercent/100.0;
+if(TrailActivate<=0 || LockRatio<=0) return;
 for(int i=PositionsTotal()-1;i>=0;i--)
 {tic=PositionGetTicket(i);
  if(tic==0) continue;
@@ -509,17 +515,19 @@ Price=PositionGetDouble(POSITION_PRICE_OPEN);
 Stop=PositionGetDouble(POSITION_SL);
 TP=PositionGetDouble(POSITION_TP);
 
-if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY && Trail!=0)
-   {if((Stop<Price || Stop==0) && Bid-(Trail+TrailStart)*_Point>=Price)
-      {trade.PositionModify(tic,NormalizeDouble(Price+TrailStart*_Point,_Digits),TP);}
-    if(Stop>=Price && Bid-Trail*_Point>Stop)
-      {trade.PositionModify(tic,NormalizeDouble(Bid-Trail*_Point,_Digits),TP);}}
+if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+   {Profit=Bid-Price;
+    if(Profit>=TrailActivate)
+      {NewStop=NormalizeDouble(Price+Profit*LockRatio,_Digits);
+       if((Stop==0 || NewStop>=Stop+TrailMinStep) && NewStop<=Bid-StopLevel)
+         {trade.PositionModify(tic,NewStop,TP);}}}
 
-if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_SELL && Trail!=0)
-   {if((Stop>Price || Stop==0) && Ask+(Trail+TrailStart)*_Point<=Price)
-      {trade.PositionModify(tic,NormalizeDouble(Price-TrailStart*_Point,_Digits),TP);}
-    if(Stop<=Price && Stop!=0 && Ask+Trail*_Point<Stop)
-      {trade.PositionModify(tic,NormalizeDouble(Ask+Trail*_Point,_Digits),TP);}}
+if(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_SELL)
+   {Profit=Price-Ask;
+    if(Profit>=TrailActivate)
+      {NewStop=NormalizeDouble(Price-Profit*LockRatio,_Digits);
+       if((Stop==0 || NewStop<=Stop-TrailMinStep) && NewStop>=Ask+StopLevel)
+         {trade.PositionModify(tic,NewStop,TP);}}}
 }}}
 //======= 현재 심볼 포지션 수
 int Count(int type)
